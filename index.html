@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f1419"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-180.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Navigator"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Floor Navigator</title>
+<style>
+:root{--bg:#0f1419;--panel:#1a222c;--line:#33414f;--fg:#e8edf2;--ac:#2f9bff;--amber:#ffb020}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:15px/1.4 "Noto Sans Thai",system-ui,sans-serif;overflow:hidden}
+#app{display:flex;flex-direction:column;height:100%;padding-top:env(safe-area-inset-top)}
+header{display:flex;flex-wrap:wrap;gap:6px;padding:8px}
+select,button{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font:inherit}
+select{flex:1 1 100%;min-width:0}
+header button{flex:1}
+button.on{background:var(--ac);border-color:var(--ac);color:#fff}
+button.amb.on{background:var(--amber);border-color:var(--amber);color:#000}
+#view{flex:1;position:relative;overflow:hidden;touch-action:none;background:#fff}
+#stage{position:absolute;left:0;top:0;transform-origin:0 0}
+#img{display:block;max-width:none;user-select:none;-webkit-user-drag:none}
+#ov{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+#bar{display:flex;align-items:center;gap:8px;padding:6px 10px calc(6px + env(safe-area-inset-bottom));font-size:13px}
+#msg{flex:1}
+#go{position:fixed;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;background:rgba(15,20,25,.94)}#bGo{padding:18px 28px;font-size:18px;background:var(--ac);border-color:var(--ac);color:#fff}#go{flex-direction:column;gap:14px}#of{font-size:14px;opacity:.8}</style></head>
+<body><div id="app">
+<header>
+<select id="fl"></select>
+<button id="bFol" class="on">ตามตัว</button><button id="bSim">จำลอง</button><button id="bCal" class="amb">ตั้งค่าใหม่</button>
+</header>
+<div id="view"><div id="stage"><img id="img" alt="floor plan"><svg id="ov"></svg></div></div>
+<div id="bar"><span id="msg"></span><button id="bClr">ล้างรอย</button></div>
+</div>
+<div id="go"><button id="bGo">แตะเพื่อเริ่มนำทาง</button><div id="of">กำลังเตรียมออฟไลน์…</div></div>
+<script>
+const F=[{"n": "L23 Piscary", "src": "img/01.jpg"}, {"n": "L22 M", "src": "img/02.jpg"}, {"n": "Guest Floor 8-17", "src": "img/03.jpg"}, {"n": "7T", "src": "img/04.jpg"}, {"n": "L7 Pool (ภาพ A)", "src": "img/05.jpg"}, {"n": "6M", "src": "img/06.jpg"}, {"n": "L7 Pool (ภาพ B)", "src": "img/07.jpg"}, {"n": "Lobby", "src": "img/08.jpg"}, {"n": "ไม่มีชื่อชั้น (ภาพ 9)", "src": "img/09.jpg"}, {"n": "G Floor", "src": "img/10.jpg"}, {"n": "B1M", "src": "img/11.jpg"}, {"n": "B1 Floor (ภาพ A)", "src": "img/12.jpg"}, {"n": "B1 Floor (ภาพ B)", "src": "img/13.jpg"}];
+const $=id=>document.getElementById(id),V=$('view'),R=Math.PI/180;
+let cur=0,sc=1,tx=0,ty=0,W=1,H=1,watch=null,sim=false,fol=true,mode='',cal=null,cps=[],trail=[],pos=null,fixes=[],acc=0;
+const ld=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
+const sv=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+const msg=t=>{$('msg').textContent=t||(F[cur].n+' · '+(cal?'ตั้งค่าแล้ว '+cps.length+' จุด':'ยังไม่ตั้งค่า GPS'))};
+const st=t=>{if(mode!=='cal')msg(t)};
+const apply=()=>{$('stage').style.transform=`translate(${tx}px,${ty}px) scale(${sc})`;draw()};
+function fitView(){const r=V.getBoundingClientRect();sc=Math.min(r.width/W,r.height/H);tx=(r.width-W*sc)/2;ty=(r.height-H*sc)/2;apply()}
+function zoomAt(cx,cy,k){const n=Math.min(8,Math.max(.1,sc*k));k=n/sc;tx=cx-(cx-tx)*k;ty=cy-(cy-ty)*k;sc=n}
+
+/* GPS (lat,lng) -> plan pixels: similarity fit (scale+rotation+shift, y-flip) from calibration points */
+function fit(c){if(c.length<2)return null;const o=c[0],k=Math.cos(o.la*R)*111320,n=c.length,
+Z=c.map(p=>[(p.lo-o.lo)*k,-(p.la-o.la)*110540]),mz=[0,0],mw=[0,0];
+Z.forEach((z,i)=>{mz[0]+=z[0]/n;mz[1]+=z[1]/n;mw[0]+=c[i].x/n;mw[1]+=c[i].y/n});
+let u=0,v=0,d=0;
+Z.forEach((z,i)=>{const p=z[0]-mz[0],q=z[1]-mz[1],r=c[i].x-mw[0],s=c[i].y-mw[1];u+=p*r+q*s;v+=p*s-q*r;d+=p*p+q*q});
+if(d<1)return null;const a=u/d,b=v/d;
+return{la:o.la,lo:o.lo,k,a,b,tx:mw[0]-(a*mz[0]-b*mz[1]),ty:mw[1]-(b*mz[0]+a*mz[1])}}
+const proj=(la,lo)=>{const E=(lo-cal.lo)*cal.k,N=-(la-cal.la)*110540;return[cal.a*E-cal.b*N+cal.tx,cal.b*E+cal.a*N+cal.ty]};
+
+function draw(){let h='';
+if(trail.length>1)h+=`<polyline points="${trail.join(' ')}" fill="none" stroke="#2f9bff" stroke-width="${3/sc}" stroke-linecap="round" stroke-linejoin="round" opacity=".85"/>`;
+cps.forEach((p,i)=>h+=`<g transform="translate(${p.x} ${p.y}) scale(${1/sc})"><circle r="10" fill="#ffb020" stroke="#fff" stroke-width="2"/><text y="4" text-anchor="middle" font-size="12" font-weight="700" fill="#000">${i+1}</text></g>`);
+if(pos){const[x,y,ac,hd]=pos;h+=`<circle cx="${x}" cy="${y}" r="${Math.max(ac,4/sc)}" fill="#2f9bff" opacity=".18"/><g transform="translate(${x} ${y}) scale(${1/sc})">${hd==null?'':`<path transform="rotate(${hd})" d="M0-30L10-12H-10Z" fill="#2f9bff" stroke="#fff" stroke-width="2"/>`}<circle r="10" fill="#2f9bff" stroke="#fff" stroke-width="3"/></g>`}
+$('ov').innerHTML=h}
+
+function setPos(x,y,ac,hd){pos=[x,y,ac,hd];const l=trail[trail.length-1];
+if(!l||Math.hypot(x-l[0],y-l[1])*sc>4){trail.push([Math.round(x),Math.round(y)]);if(trail.length>600)trail.shift()}
+if(fol){const r=V.getBoundingClientRect();tx=r.width/2-x*sc;ty=r.height/2-y*sc}apply()}
+
+function onFix(p){const c=p.coords,a=Math.round(c.accuracy);acc=c.accuracy;fixes.push({la:c.latitude,lo:c.longitude});if(fixes.length>5)fixes.shift();
+if(!cal)return st('GPS ±'+a+' ม. · ชั้นนี้ยังไม่ได้ตั้งค่า (กด "ตั้งค่า")');
+const q=proj(c.latitude,c.longitude),m=Math.hypot(cal.a,cal.b),
+hd=c.heading!=null&&!isNaN(c.heading)&&c.speed>.3?c.heading+Math.atan2(cal.b,cal.a)/R:null;
+setPos(q[0],q[1],c.accuracy*m,hd);
+st((q[0]<0||q[1]<0||q[0]>W||q[1]>H?'อยู่นอกพื้นที่แผนที่ · ':'')+'GPS ±'+a+' ม.')}
+
+function tap(e){const r=V.getBoundingClientRect(),x=(e.clientX-r.left-tx)/sc,y=(e.clientY-r.top-ty)/sc;
+if(mode==='cal'){if(!fixes.length)return msg('รอสัญญาณ GPS สักครู่ แล้วแตะใหม่');
+const a=fixes.reduce((s,f)=>({la:s.la+f.la/fixes.length,lo:s.lo+f.lo/fixes.length}),{la:0,lo:0});
+cps.push({x,y,la:a.la,lo:a.lo});sv('c'+cur,cps);cal=fit(cps);
+if(cps.length>1&&!cal){cps.pop();sv('c'+cur,cps);return msg('จุดใกล้กันเกินไป เดินให้ห่างจากจุดแรกอย่างน้อย 5 ม. แล้วแตะใหม่')}
+if(cal){fol=true;$('bFol').classList.add('on');guide();st('พร้อมแล้ว · จุดน้ำเงินจะเคลื่อนตามคุณ')}else guide();
+if(acc>30)$('msg').textContent+=' · ⚠ GPS ยังไม่นิ่ง (±'+Math.round(acc)+' ม.) ตำแหน่งอาจเพี้ยน';apply()}
+else if(sim)setPos(x,y,12/sc,null)}
+
+/* pan / pinch / wheel */
+const P=new Map(),pp=()=>[...P.values()],dist=()=>{const a=pp();return a.length<2?0:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y)};
+let d0=0,mv=0,t0=0;
+V.onpointerdown=e=>{V.setPointerCapture(e.pointerId);P.set(e.pointerId,{x:e.clientX,y:e.clientY});d0=dist();mv=0;t0=Date.now()};
+V.onpointermove=e=>{const p=P.get(e.pointerId);if(!p)return;const dx=e.clientX-p.x,dy=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;mv+=Math.abs(dx)+Math.abs(dy);if(mv>8&&fol){fol=false;$("bFol").classList.remove("on")}
+if(P.size===1){tx+=dx;ty+=dy}
+else if(P.size===2){const d=dist(),a=pp(),r=V.getBoundingClientRect();if(d0)zoomAt((a[0].x+a[1].x)/2-r.left,(a[0].y+a[1].y)/2-r.top,d/d0);d0=d}
+apply()};
+V.onpointerup=V.onpointercancel=e=>{if(P.size===1&&mv<8&&Date.now()-t0<500&&e.type==='pointerup')tap(e);P.delete(e.pointerId)};
+V.onwheel=e=>{e.preventDefault();const r=V.getBoundingClientRect();zoomAt(e.clientX-r.left,e.clientY-r.top,e.deltaY<0?1.15:.87);apply()};
+
+/* buttons */
+function startGps(){if(watch!==null)return;
+if(!navigator.geolocation)return msg('อุปกรณ์นี้ไม่รองรับ GPS');
+try{navigator.wakeLock&&navigator.wakeLock.request('screen').catch(()=>{})}catch(x){}
+watch=navigator.geolocation.watchPosition(onFix,er=>msg('GPS ผิดพลาด: '+er.message+' · ตรวจว่าอนุญาตตำแหน่งแล้ว'),{enableHighAccuracy:true,maximumAge:1000,timeout:20000});guide()}
+$('bGo').onclick=()=>{$('go').remove();startGps()};
+$('bFol').onclick=e=>{fol=!fol;e.target.classList.toggle('on',fol)};
+$('bSim').onclick=e=>{sim=!sim;e.target.classList.toggle('on',sim);msg(sim?'โหมดจำลอง: แตะแผนที่เพื่อย้ายตำแหน่ง':'')};
+function guide(){if(cal){mode='';$('bCal').classList.remove('on');return msg()}mode='cal';$('bCal').classList.add('on');
+msg(cps.length?'ขั้นที่ 2/2 · เดินไปอีกจุดที่ห่างจากจุดแรกอย่างน้อย 5 ม. แล้วแตะตำแหน่งที่ยืนอยู่บนแผนที่':'ขั้นที่ 1/2 · ยืนที่จุดที่รู้ตำแหน่ง (เช่น ป้ายทางออก) แล้วแตะจุดนั้นบนแผนที่')}
+$('bCal').onclick=()=>{cps=[];cal=null;pos=null;trail=[];sv('c'+cur,cps);guide();apply()};
+$('bClr').onclick=()=>{trail=[];apply()};
+
+/* floors */
+function load(i){cur=i;trail=[];pos=null;cps=ld('c'+i)||[];cal=fit(cps);const m=$('img');
+m.onload=()=>{W=m.naturalWidth;H=m.naturalHeight;const o=$('ov');o.setAttribute('viewBox','0 0 '+W+' '+H);o.setAttribute('width',W);o.setAttribute('height',H);fitView()};
+m.src=F[i].src;mode='';$('bCal').classList.remove('on');watch!==null?guide():msg()}
+F.forEach((f,i)=>$('fl').add(new Option(f.n,i)));
+$('fl').onchange=e=>load(+e.target.value);
+window.onresize=fitView;
+load(0);
+const ofl=t=>{const o=$('of');if(o)o.textContent=t};
+if('serviceWorker' in navigator&&/^https?:/.test(location.protocol)){navigator.serviceWorker.register('sw.js').catch(()=>ofl('ติดตั้งโหมดออฟไลน์ไม่สำเร็จ'));navigator.serviceWorker.ready.then(()=>ofl('✓ พร้อมใช้งานออฟไลน์'))}else ofl('โหมดออฟไลน์ต้องเปิดผ่านลิงก์ https');
+</script></body></html>
